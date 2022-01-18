@@ -1,3 +1,5 @@
-apiVersion: echoClip:v1
+apiVersion: "echoClip/v1"
 key: "v"
-modifiers: ""
+modifiers:
+  - "win"
+  - "shift"

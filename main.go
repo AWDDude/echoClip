@@ -4,19 +4,26 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
+	"strings"
 
+	"git.tcp.direct/kayos/sendkeys"
 	"github.com/rs/zerolog/log"
+	"golang.design/x/clipboard"
 	"golang.design/x/hotkey"
+	"golang.design/x/hotkey/mainthread"
 	"gopkg.in/yaml.v2"
 )
 
 func main() {
-	confPath := os.Args[1]
-	if confPath == "" {
-		confPath = "./config.yaml"
+	dirPath := strings.Replace(filepath.Dir(os.Args[0]), `\`, "/", -1)
+
+	confPath := fmt.Sprintf("%v/config.yaml", dirPath)
+	if len(os.Args) > 1 {
+		confPath = os.Args[1]
 	}
 
-	log.Info().Str("configPath", confPath).Msg("starting echoClip")
+	log.Info().Str("programPath", os.Args[0]).Str("configPath", confPath).Msg("starting echoClip")
 
 	conf, err := NewYamlConfig().FromFile(confPath)
 	if err != nil {
@@ -35,23 +42,48 @@ func main() {
 	}
 
 	var key hotkey.Key
+	key, err = strToKey(conf.Key)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to parse hotkey from config")
+	}
 
-	hk := hotkey.New(mods, key)
+	k, err := sendkeys.NewKBWrapWithOptions(sendkeys.Noisy)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to create kb object")
+		return
+	}
 
+	var clipString string
+	for {
+		mainthread.Init(makeHKThread(mods, key))
+		clipString = string(clipboard.Read(clipboard.FmtText))
+		if clipString != "" {
+			break
+		}
+		log.Warn().Msg("clipboard was empty")
+	}
+
+	if err = k.Type(clipString); err != nil {
+		log.Warn().Err(err).Msg("failed to send key presses")
+	}
 }
 
-func strToMod(in string) (hotkey.Modifier, error) {
-	switch in {
-	case "win":
-		return hotkey.ModWin, nil
-	case "ctrl":
-		return hotkey.ModCtrl, nil
-	case "alt":
-		return hotkey.ModAlt, nil
-	case "shift":
-		return hotkey.ModShift, nil
-	default:
-		return 0, fmt.Errorf("%v is not a valid modifier key", in)
+func makeHKThread(mods []hotkey.Modifier, key hotkey.Key) func() {
+	return func() {
+		hk := hotkey.New(mods, key)
+		err := hk.Register()
+		if err != nil {
+			log.Warn().Err(err).Msg("error while registering hotkey")
+			return
+		}
+		log.Info().Str("hotkey", hk.String()).Msg("hotkey registered")
+
+		<-hk.Keydown()
+		log.Info().Str("hotkey", hk.String()).Msg("hotkey pressed")
+		<-hk.Keyup()
+		log.Info().Str("hotkey", hk.String()).Msg("hotkey release")
+		hk.Unregister()
+		log.Info().Str("hotkey", hk.String()).Msg("hotkey unregistered")
 	}
 }
 
@@ -85,8 +117,8 @@ func (yc *YamlConfig) FromFile(path string) (*YamlConfig, error) {
 }
 
 func (yc *YamlConfig) validate() error {
-	if yc.ApiVersion != "echoClip:v1" {
-		return fmt.Errorf("error, wrong config apiVersion")
-	}
+	// if yc.ApiVersion != "echoClip/v1" {
+	// 	return fmt.Errorf("error, wrong config apiVersion")
+	// }
 	return nil
 }
